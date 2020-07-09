@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from . import util
+import matplotlib.pyplot as plt
 
 class SuperPointNet(torch.nn.Module):
     """ Pytorch definition of SuperPoint Network. """
@@ -64,8 +65,11 @@ class SuperPointNet(torch.nn.Module):
     def semi_to_heatmap(self, semi, net_input_shape):
         N, _, H, W = net_input_shape
         # Reshape detector head
-        dense = torch.exp(semi) # Softmax.
-        dense = dense / (torch.sum(dense, dim=0)+.00001) # Should sum to 1.
+        #  dense = torch.exp(semi) # Softmax.
+        #  print(dense.shape)
+        #  print((torch.sum(dense, dim=1)+.00001).shape)
+        #  dense = dense / (torch.sum(dense, dim=1)+.00001) # Should sum to 1.
+        dense = F.softmax(semi, dim=1)
         # Remove dustbin.
         nodust = dense[:, :-1, :, :] # N x 64 x Hc x Wc
         # Reshape to get full resolution heatmap.
@@ -79,8 +83,7 @@ class SuperPointNet(torch.nn.Module):
 
 class SuperPointFrontend(object):
     """ Wrapper around pytorch net to help with pre and post image processing. """
-    def __init__(self, weights_path, nms_dist, conf_thresh, nn_thresh,
-                             cuda=False):
+    def __init__(self, weights_path, nms_dist, conf_thresh, nn_thresh, cuda=False):
         self.name = 'SuperPoint'
         self.cuda = cuda
         self.nms_dist = nms_dist
@@ -97,8 +100,7 @@ class SuperPointFrontend(object):
             self.net = self.net.cuda()
         else:
             # Train on GPU, deploy on CPU.
-            self.net.load_state_dict(torch.load(weights_path,
-                                                             map_location=lambda storage, loc: storage))
+            self.net.load_state_dict(torch.load(weights_path, map_location=lambda storage, loc: storage))
         self.net.eval()
 
 
@@ -125,11 +127,13 @@ class SuperPointFrontend(object):
         semi, coarse_desc = outs[0], outs[1]
         # Convert pytorch -> numpy.
         semi = semi.data.cpu().numpy().squeeze()
+
         # --- Process points.
         dense = np.exp(semi) # Softmax.
         dense = dense / (np.sum(dense, axis=0)+.00001) # Should sum to 1.
         # Remove dustbin.
         nodust = dense[:-1, :, :]
+
         # Reshape to get full resolution heatmap.
         Hc = int(H / self.cell)
         Wc = int(W / self.cell)
@@ -137,6 +141,8 @@ class SuperPointFrontend(object):
         heatmap = np.reshape(nodust, [Hc, Wc, self.cell, self.cell])
         heatmap = np.transpose(heatmap, [0, 2, 1, 3])
         heatmap = np.reshape(heatmap, [Hc*self.cell, Wc*self.cell])
+        return None, None, heatmap
+
         xs, ys = np.where(heatmap > self.conf_thresh) # Confidence threshold.
         if len(xs) == 0:
             return np.zeros((3, 0)), None, None
